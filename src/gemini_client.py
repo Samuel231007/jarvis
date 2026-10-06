@@ -2,12 +2,15 @@
 Cliente de Gemini — interpreta los mensajes de Samuel en lenguaje natural
 y decide qué acción tomar con el calendario.
 
-Usa el modelo gemini-1.5-flash (gratuito en Google AI Studio).
-Límites gratuitos verificados oct-2024: 15 RPM, 1 500 RPD, 1M tokens/min.
+Usa el modelo gemini-3.8-flash mediante la biblioteca heredada google-generativeai.
+Google recomienda migrar a google-genai; verificar el nivel gratuito y sus límites
+vigentes antes de depender de ellos.
 """
 import os
 import logging
 import json
+import asyncio
+import uuid
 from datetime import datetime
 import pytz
 import google.generativeai as genai
@@ -66,37 +69,46 @@ class GeminiClient:
         now = datetime.now(TIMEZONE).strftime("%Y-%m-%d %H:%M (%A)")
         return SYSTEM_PROMPT.replace("{fecha_actual}", now)
 
-    async def process_request(self, user_text: str, calendar_client) -> str:
+    async def process_request(
+        self, user_text: str, calendar_client, confirmation_store, user_id: int
+    ) -> str:
         """
         Envía el mensaje de Samuel a Gemini y ejecuta la acción detectada.
         Retorna el texto de respuesta final para enviar por Telegram.
         """
         import re
-        logger.info("Enviando a Gemini: %s", user_text[:80])
+        logger.info("Enviando solicitud a Gemini (longitud=%d)", len(user_text))
 
         response = self.model.generate_content(user_text)
         raw = response.text.strip()
 
-        logger.info("Respuesta cruda de Gemini: %s", raw[:200])
+        logger.info("Respuesta de Gemini recibida (longitud=%d)", len(raw))
 
         # Buscar el bloque JSON { ... } dentro de la respuesta
         match = re.search(r"\{[\s\S]*\}", raw)
         if match:
             try:
                 data = json.loads(match.group(0))
-                return await self._execute_action(data, calendar_client)
-            except Exception as e:
-                logger.warning("Error parseando JSON detectado: %s", e)
+            except json.JSONDecodeError as e:
+                logger.warning("La respuesta JSON de Gemini no se pudo leer: %s", e)
+            else:
+                try:
+                    return await self._execute_action(
+                        data, calendar_client, confirmation_store, user_id
+                    )
+                except Exception:
+                    logger.exception("No se pudo procesar la solicitud de calendario")
+                    return "No pude procesar esa solicitud. No hice cambios en tu calendario."
 
         # Si no tiene JSON, es una respuesta conversacional directa
         return raw
 
-    async def _execute_action(self, data: dict, calendar_client) -> str:
+    async def _execute_action(
+        self, data: dict, calendar_client, confirmation_store, user_id: int
+    ) -> str:
         """Ejecuta la acción del calendario según lo que Gemini interpretó."""
         action = data.get("action", "ninguna")
         params = data.get("params", {})
-        requiere_confirmacion = data.get("confirmacion_requerida", False)
-        msg_confirmacion = data.get("mensaje_confirmacion", "")
 
         if action == "ninguna":
             return data.get("mensaje_confirmacion", "¿En qué más puedo ayudarte?")
@@ -116,13 +128,101 @@ class GeminiClient:
                 lines.append(f"• {e['display']}")
             return "\n".join(lines)
 
-        # Para crear/mover/eliminar: siempre pedir confirmación
-        if requiere_confirmacion and msg_confirmacion:
-            # Guardar la acción pendiente para cuando Samuel confirme
-            # (se implementa en Fase 2 con estados de conversación)
+        if action not in ("crear_evento", "eliminar_evento", "mover_evento"):
+            return "No reconocí esa operación. No hice cambios en tu calendario."
+        if confirmation_store is None:
             return (
-                f"⚠️ {msg_confirmacion}\n\n"
-                "_(Responde *sí* para confirmar o *no* para cancelar)_"
+                "No puedo pedir una confirmación segura porque falta configurar la hoja privada. "
+                "No hice cambios en tu calendario."
             )
 
-        return "Entendido. ¿Puedes darme más detalles?"
+        try:
+            proposal = self._prepare_calendar_action(action, params, calendar_client)
+        except ValueError as exc:
+            return f"No hice cambios: {exc}"
+        if isinstance(proposal, str):
+            return proposal
+
+        action_id = str(uuid.uuid4())
+        try:
+            await asyncio.to_thread(
+                confirmation_store.save_pending, action_id, user_id, proposal
+            )
+        except Exception:
+            logger.exception("No se pudo guardar la confirmación pendiente")
+            return "No pude guardar la confirmación de forma segura; no hice cambios."
+
+        return (
+            f"⚠️ {self._describe_action(proposal)}\n\n"
+            "Responde *sí* para confirmar o *no* para cancelar. "
+            "La confirmación vence en 10 minutos."
+        )
+
+    @staticmethod
+    def _prepare_calendar_action(action: str, params: dict, calendar_client) -> dict | str:
+        if action == "crear_evento":
+            title = str(params.get("titulo", "")).strip()
+            start = GeminiClient._normalize_datetime(params.get("fecha_inicio"))
+            end = GeminiClient._normalize_datetime(params.get("fecha_fin"))
+            if not title or not start or not end:
+                raise ValueError("faltan el título o las fechas de inicio y fin.")
+            if datetime.fromisoformat(end) <= datetime.fromisoformat(start):
+                raise ValueError("la hora de fin debe ser posterior a la de inicio.")
+            return {
+                "action": action,
+                "title": title,
+                "start": start,
+                "end": end,
+                "description": str(params.get("descripcion", "")),
+            }
+
+        title_query = str(params.get("titulo_aproximado", "")).strip()
+        if not title_query:
+            raise ValueError("necesito el título del evento que quieres cambiar.")
+        matches = calendar_client.find_events_by_title(title_query)
+        if not matches:
+            return f"No encontré un evento próximo que coincida con «{title_query}». No hice cambios."
+        if len(matches) > 1:
+            choices = "\n".join(f"• {item['display']}" for item in matches[:5])
+            return (
+                f"Encontré varios eventos parecidos. Dime la fecha o el título exacto:\n{choices}"
+            )
+
+        event = matches[0]
+        if action == "eliminar_evento":
+            return {"action": action, "event_id": event["id"], "title": event["title"]}
+
+        start = GeminiClient._normalize_datetime(params.get("nueva_fecha_inicio"))
+        end = GeminiClient._normalize_datetime(params.get("nueva_fecha_fin"))
+        if not start or not end:
+            raise ValueError("faltan la nueva fecha de inicio y fin.")
+        if datetime.fromisoformat(end) <= datetime.fromisoformat(start):
+            raise ValueError("la hora de fin debe ser posterior a la de inicio.")
+        return {
+            "action": action,
+            "event_id": event["id"],
+            "title": event["title"],
+            "start": start,
+            "end": end,
+        }
+
+    @staticmethod
+    def _normalize_datetime(value) -> str | None:
+        if not isinstance(value, str) or not value.strip():
+            return None
+        try:
+            parsed = datetime.fromisoformat(value.strip().replace("Z", "+00:00"))
+        except ValueError:
+            return None
+        if parsed.tzinfo is None:
+            parsed = TIMEZONE.localize(parsed)
+        return parsed.isoformat()
+
+    @staticmethod
+    def _describe_action(action: dict) -> str:
+        kind = action["action"]
+        if kind == "crear_evento":
+            return f"¿Confirmas crear «{action['title']}» de {action['start']} a {action['end']}?"
+        if kind == "mover_evento":
+            return f"¿Confirmas mover «{action['title']}» a {action['start']}–{action['end']}?"
+        return f"¿Confirmas eliminar «{action['title']}»?"

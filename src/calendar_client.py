@@ -14,8 +14,11 @@ from googleapiclient.discovery import build
 
 logger = logging.getLogger(__name__)
 
-# Solo pedimos permisos de lectura/escritura del calendario
-SCOPES = ["https://www.googleapis.com/auth/calendar"]
+# Permisos mínimos para Calendar y para el archivo dedicado de confirmaciones.
+SCOPES = [
+    "https://www.googleapis.com/auth/calendar",
+    "https://www.googleapis.com/auth/drive.file",
+]
 TIMEZONE = "America/Bogota"
 TZ = ZoneInfo(TIMEZONE)
 
@@ -35,18 +38,34 @@ class CalendarClient:
         creds = None
         import json
 
-        # 1. Prioridad para la nube (Render): leer token desde variable de entorno
+        # 1. Prioridad para la nube (Render): leer token desde variable de entorno.
+        # Si el token no contiene drive.file, hay que autorizar de nuevo en local.
         env_token = os.environ.get("GOOGLE_TOKEN_JSON")
         if env_token:
             try:
                 token_data = json.loads(env_token)
-                creds = Credentials.from_authorized_user_info(token_data, SCOPES)
+                granted_scopes = set(token_data.get("scopes", []))
+                if set(SCOPES).issubset(granted_scopes):
+                    creds = Credentials.from_authorized_user_info(token_data, SCOPES)
+                else:
+                    logger.warning(
+                        "GOOGLE_TOKEN_JSON no incluye los permisos de Calendar y drive.file. "
+                        "Vuelve a autorizar localmente y actualiza esta variable."
+                    )
             except Exception as e:
                 logger.warning("No se pudo cargar GOOGLE_TOKEN_JSON de entorno: %s", e)
 
         # 2. Desarrollo local: leer desde archivo token.json
         if not creds and os.path.exists("token.json"):
-            creds = Credentials.from_authorized_user_file("token.json", SCOPES)
+            try:
+                with open("token.json", encoding="utf-8") as token_file:
+                    token_data = json.load(token_file)
+                if set(SCOPES).issubset(set(token_data.get("scopes", []))):
+                    creds = Credentials.from_authorized_user_info(token_data, SCOPES)
+                else:
+                    logger.info("token.json necesita autorizarse de nuevo con drive.file")
+            except (OSError, ValueError, TypeError) as e:
+                logger.warning("No se pudo leer token.json: %s", e)
 
         # Si el token expiró y tiene refresh_token, renovarlo automáticamente
         if creds and creds.expired and creds.refresh_token:
@@ -58,6 +77,11 @@ class CalendarClient:
                 raise FileNotFoundError(
                     "No se encontró credentials.json ni GOOGLE_TOKEN_JSON. "
                     "Configura las credenciales de Google Calendar."
+                )
+            if os.environ.get("GOOGLE_TOKEN_JSON") and not os.path.exists("credentials.json"):
+                raise RuntimeError(
+                    "Falta autorizar el permiso limitado drive.file. Ejecuta la autorización "
+                    "local desde CalendarClient y actualiza GOOGLE_TOKEN_JSON en el hosting."
                 )
             flow = InstalledAppFlow.from_client_secrets_file(
                 "credentials.json", SCOPES
@@ -122,7 +146,14 @@ class CalendarClient:
         _, events = self.get_events(mode="days", days=days)
         return events
 
-    def create_event(self, title: str, start: str, end: str, description: str = "") -> dict:
+    def create_event(
+        self,
+        title: str,
+        start: str,
+        end: str,
+        description: str = "",
+        action_id: str | None = None,
+    ) -> dict:
         """
         Crea un evento en el calendario principal.
         start y end deben ser strings ISO8601 con zona horaria.
@@ -133,11 +164,38 @@ class CalendarClient:
             "start": {"dateTime": start, "timeZone": TIMEZONE},
             "end": {"dateTime": end, "timeZone": TIMEZONE},
         }
+        if action_id:
+            event_body["extendedProperties"] = {
+                "private": {"jarvis_action_id": action_id}
+            }
         created = self.service.events().insert(
             calendarId="primary", body=event_body
         ).execute()
-        logger.info("Evento creado: %s (%s)", title, created.get("id"))
+        logger.info("Evento creado (id=%s)", created.get("id"))
         return created
+
+    def find_event_by_action_id(self, action_id: str) -> dict | None:
+        """Busca si una confirmación de creación ya se ejecutó antes."""
+        result = self.service.events().list(
+            calendarId="primary",
+            privateExtendedProperty=f"jarvis_action_id={action_id}",
+            maxResults=1,
+        ).execute()
+        events = result.get("items", [])
+        return events[0] if events else None
+
+    def move_event(self, event_id: str, start: str, end: str) -> dict:
+        """Actualiza la hora de un evento, conservando título y descripción."""
+        updated = self.service.events().patch(
+            calendarId="primary",
+            eventId=event_id,
+            body={
+                "start": {"dateTime": start, "timeZone": TIMEZONE},
+                "end": {"dateTime": end, "timeZone": TIMEZONE},
+            },
+        ).execute()
+        logger.info("Evento movido (id=%s)", event_id)
+        return updated
 
     def create_recurring_event(
         self,
@@ -162,15 +220,21 @@ class CalendarClient:
         created = self.service.events().insert(
             calendarId="primary", body=event_body
         ).execute()
-        logger.info("Evento recurrente creado: %s (%s)", title, created.get("id"))
+        logger.info("Evento recurrente creado (id=%s)", created.get("id"))
         return created
 
     def delete_event(self, event_id: str) -> None:
         """Elimina un evento por su ID."""
-        self.service.events().delete(
-            calendarId="primary", eventId=event_id
-        ).execute()
-        logger.info("Evento eliminado: %s", event_id)
+        from googleapiclient.errors import HttpError
+        try:
+            self.service.events().delete(
+                calendarId="primary", eventId=event_id
+            ).execute()
+        except HttpError as exc:
+            # Repetir una confirmación tras un reinicio no debe fallar si ya se borró.
+            if getattr(exc.resp, "status", None) != 404:
+                raise
+        logger.info("Evento eliminado (id=%s)", event_id)
 
     def find_events_by_title(self, title_query: str, days_ahead: int = 30) -> list[dict]:
         """Busca eventos cuyo título contenga la cadena dada."""

@@ -33,27 +33,37 @@ class CalendarClient:
         - Siguientes veces: usa token.json guardado localmente.
         """
         creds = None
+        import json
 
-        if os.path.exists("token.json"):
+        # 1. Prioridad para la nube (Render): leer token desde variable de entorno
+        env_token = os.environ.get("GOOGLE_TOKEN_JSON")
+        if env_token:
+            try:
+                token_data = json.loads(env_token)
+                creds = Credentials.from_authorized_user_info(token_data, SCOPES)
+            except Exception as e:
+                logger.warning("No se pudo cargar GOOGLE_TOKEN_JSON de entorno: %s", e)
+
+        # 2. Desarrollo local: leer desde archivo token.json
+        if not creds and os.path.exists("token.json"):
             creds = Credentials.from_authorized_user_file("token.json", SCOPES)
 
-        # Si no hay token válido, renovar o pedir autorización
-        if not creds or not creds.valid:
-            if creds and creds.expired and creds.refresh_token:
-                creds.refresh(Request())
-            else:
-                if not os.path.exists("credentials.json"):
-                    raise FileNotFoundError(
-                        "No se encontró credentials.json. "
-                        "Descárgalo desde Google Cloud Console."
-                    )
-                flow = InstalledAppFlow.from_client_secrets_file(
-                    "credentials.json", SCOPES
-                )
-                # Puerto fijo 8080 es más estable que puerto aleatorio en Windows
-                creds = flow.run_local_server(port=8080, open_browser=True)
+        # Si el token expiró y tiene refresh_token, renovarlo automáticamente
+        if creds and creds.expired and creds.refresh_token:
+            creds.refresh(Request())
 
-            # Guardar token para la próxima vez
+        # Si aún no hay credenciales (solo ocurrirá en local la primera vez)
+        if not creds or not creds.valid:
+            if not os.path.exists("credentials.json"):
+                raise FileNotFoundError(
+                    "No se encontró credentials.json ni GOOGLE_TOKEN_JSON. "
+                    "Configura las credenciales de Google Calendar."
+                )
+            flow = InstalledAppFlow.from_client_secrets_file(
+                "credentials.json", SCOPES
+            )
+            creds = flow.run_local_server(port=8080, open_browser=True)
+
             with open("token.json", "w") as f:
                 f.write(creds.to_json())
 

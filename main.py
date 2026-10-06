@@ -56,6 +56,30 @@ async def webhook():
     return "OK", 200
 
 
+@app.route("/set_webhook", methods=["GET"])
+async def set_webhook():
+    """Configura automáticamente el Webhook de Telegram al abrir esta URL en el navegador."""
+    webhook_url = os.environ.get("WEBHOOK_URL", "").strip()
+    if not webhook_url:
+        return (
+            "⚠️ No has configurado la variable WEBHOOK_URL en el panel de Render.<br>"
+            "Agrega la URL pública de tu servicio (ejemplo: https://mi-jarvis.onrender.com) en Environment y reintenta.",
+            400,
+        )
+
+    target_url = f"{webhook_url.rstrip('/')}/webhook"
+    current_bot = get_bot_app()
+    success = await current_bot.bot.set_webhook(url=target_url)
+
+    if success:
+        return (
+            f"🎉 <b>¡Webhook configurado con éxito!</b><br>"
+            f"JARVIS está conectado a Telegram 24/7 en: <code>{target_url}</code>",
+            200,
+        )
+    return "❌ Telegram no aceptó el webhook. Verifica el token y la URL.", 500
+
+
 def acquire_single_instance_lock(port: int = 49999):
     """Evita ejecutar dos instancias del bot al mismo tiempo en la misma PC."""
     import socket

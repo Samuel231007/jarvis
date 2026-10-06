@@ -8,3 +8,4 @@ flask==3.0.3
 gunicorn==23.0.0
 pytz==2024.2
 tzdata==2024.2
+asgiref==3.8.1

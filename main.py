@@ -56,7 +56,24 @@ async def webhook():
     return "OK", 200
 
 
+def acquire_single_instance_lock(port: int = 49999):
+    """Evita ejecutar dos instancias del bot al mismo tiempo en la misma PC."""
+    import socket
+    import sys
+    try:
+        sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        sock.bind(("127.0.0.1", port))
+        return sock
+    except OSError:
+        print("\n" + "=" * 65)
+        print("⚠️  AVISO: Ya tienes otra ventana de JARVIS corriendo en tu PC.")
+        print("   Ciérrala o presiona Ctrl + C en esa ventana antes de abrir otra.")
+        print("=" * 65 + "\n")
+        sys.exit(0)
+
+
 if __name__ == "__main__":
     # Solo para desarrollo local con polling (sin webhook)
+    _lock = acquire_single_instance_lock()
     from src.bot import run_polling
     run_polling()

@@ -49,12 +49,15 @@ async def webhook():
     Endpoint que recibe las actualizaciones de Telegram.
     Telegram llama aquí cada vez que Samuel escribe un mensaje.
     """
-    from telegram import Update
+    try:
+        from telegram import Update
 
-    data = request.get_json(force=True)
-    current_bot = await get_initialized_bot()
-    update = Update.de_json(data, current_bot.bot)
-    await current_bot.process_update(update)
+        data = request.get_json(force=True)
+        current_bot = await get_initialized_bot()
+        update = Update.de_json(data, current_bot.bot)
+        await current_bot.process_update(update)
+    except Exception as e:
+        logger.error("Error procesando actualización de webhook: %s", e, exc_info=True)
 
     return "OK", 200
 

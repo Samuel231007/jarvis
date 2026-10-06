@@ -20,6 +20,7 @@ from src.confirmation_store import (
     StoreRateLimitError,
 )
 from src.gemini_client import GeminiClient
+from src.calendar_client import CalendarClient
 
 
 class FakeRequest:
@@ -68,6 +69,19 @@ class FakeSheetService:
 
 
 class ConfirmationStoreTests(unittest.TestCase):
+    def test_calendar_client_builds_service_from_authenticated_credentials(self):
+        credentials = object()
+        calendar_service = object()
+        with (
+            patch.object(CalendarClient, "_authenticate", return_value=credentials) as authenticate,
+            patch("src.calendar_client.build", return_value=calendar_service) as build_service,
+        ):
+            client = CalendarClient()
+
+        authenticate.assert_called_once_with()
+        build_service.assert_called_once_with("calendar", "v3", credentials=credentials)
+        self.assertIs(client.service, calendar_service)
+
     def test_store_authenticates_google_credentials_without_calendar_instance(self):
         credentials = object()
         with (

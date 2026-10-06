@@ -27,7 +27,8 @@ class CalendarClient:
     """Maneja la lectura y escritura en Google Calendar."""
 
     def __init__(self):
-        self.service = self._authenticate()
+        credentials = self._authenticate()
+        self.service = build("calendar", "v3", credentials=credentials)
 
     @staticmethod
     def _authenticate():
@@ -92,7 +93,7 @@ class CalendarClient:
             with open("token.json", "w") as f:
                 f.write(creds.to_json())
 
-        return build("calendar", "v3", credentials=creds)
+        return creds
 
     def get_events(
         self,

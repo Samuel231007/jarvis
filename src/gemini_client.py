@@ -57,41 +57,39 @@ class GeminiClient:
         api_key = os.environ["GEMINI_API_KEY"]
         genai.configure(api_key=api_key)
         self.model = genai.GenerativeModel(
-            model_name="gemini-1.5-flash",
+            model_name="gemini-3.8-flash",
             system_instruction=self._build_system_prompt(),
         )
 
     def _build_system_prompt(self) -> str:
         """Inyecta la fecha/hora actual de Bogotá en el prompt."""
         now = datetime.now(TIMEZONE).strftime("%Y-%m-%d %H:%M (%A)")
-        return SYSTEM_PROMPT.format(fecha_actual=now)
+        return SYSTEM_PROMPT.replace("{fecha_actual}", now)
 
     async def process_request(self, user_text: str, calendar_client) -> str:
         """
         Envía el mensaje de Samuel a Gemini y ejecuta la acción detectada.
         Retorna el texto de respuesta final para enviar por Telegram.
         """
+        import re
         logger.info("Enviando a Gemini: %s", user_text[:80])
 
         response = self.model.generate_content(user_text)
         raw = response.text.strip()
 
-        logger.debug("Respuesta de Gemini: %s", raw[:200])
+        logger.info("Respuesta cruda de Gemini: %s", raw[:200])
 
-        # Intentar parsear como JSON (acción de calendario)
-        try:
-            # Limpiar posibles bloques markdown que Gemini agregue
-            if raw.startswith("```"):
-                raw = raw.split("```")[1]
-                if raw.startswith("json"):
-                    raw = raw[4:]
+        # Buscar el bloque JSON { ... } dentro de la respuesta
+        match = re.search(r"\{[\s\S]*\}", raw)
+        if match:
+            try:
+                data = json.loads(match.group(0))
+                return await self._execute_action(data, calendar_client)
+            except Exception as e:
+                logger.warning("Error parseando JSON detectado: %s", e)
 
-            data = json.loads(raw)
-            return await self._execute_action(data, calendar_client)
-
-        except (json.JSONDecodeError, KeyError):
-            # No es JSON — es una respuesta de texto normal
-            return raw
+        # Si no tiene JSON, es una respuesta conversacional directa
+        return raw
 
     async def _execute_action(self, data: dict, calendar_client) -> str:
         """Ejecuta la acción del calendario según lo que Gemini interpretó."""

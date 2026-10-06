@@ -50,7 +50,8 @@ class CalendarClient:
                 flow = InstalledAppFlow.from_client_secrets_file(
                     "credentials.json", SCOPES
                 )
-                creds = flow.run_local_server(port=0)
+                # Puerto fijo 8080 es más estable que puerto aleatorio en Windows
+                creds = flow.run_local_server(port=8080, open_browser=True)
 
             # Guardar token para la próxima vez
             with open("token.json", "w") as f:
@@ -93,6 +94,32 @@ class CalendarClient:
             calendarId="primary", body=event_body
         ).execute()
         logger.info("Evento creado: %s (%s)", title, created.get("id"))
+        return created
+
+    def create_recurring_event(
+        self,
+        title: str,
+        start: str,
+        end: str,
+        until_date: str,
+        description: str = "",
+    ) -> dict:
+        """
+        Crea un evento recurrente semanal hasta una fecha dada (YYYYMMDD).
+        """
+        # until_date en formato YYYYMMDDTHHMMSSZ
+        rrule = f"RRULE:FREQ=WEEKLY;UNTIL={until_date}T235959Z"
+        event_body = {
+            "summary": title,
+            "description": description,
+            "start": {"dateTime": start, "timeZone": TIMEZONE},
+            "end": {"dateTime": end, "timeZone": TIMEZONE},
+            "recurrence": [rrule],
+        }
+        created = self.service.events().insert(
+            calendarId="primary", body=event_body
+        ).execute()
+        logger.info("Evento recurrente creado: %s (%s)", title, created.get("id"))
         return created
 
     def delete_event(self, event_id: str) -> None:

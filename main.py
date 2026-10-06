@@ -16,12 +16,19 @@ logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s [%(levelname)s] %(name)s: %(message)s"
 )
+logging.getLogger("httpx").setLevel(logging.WARNING)
 logger = logging.getLogger(__name__)
 
 app = Flask(__name__)
 
-# Crear la instancia del bot (se inicializa una sola vez)
-bot_app = create_bot()
+# En modo webhook (Render/Gunicorn), bot_app se inicializa bajo demanda
+bot_app = None
+
+def get_bot_app():
+    global bot_app
+    if bot_app is None:
+        bot_app = create_bot()
+    return bot_app
 
 
 @app.route("/", methods=["GET"])
@@ -42,8 +49,9 @@ async def webhook():
     data = request.get_json(force=True)
     logger.info("Actualización recibida de Telegram")
 
-    update = Update.de_json(data, bot_app.bot)
-    await bot_app.process_update(update)
+    current_bot = get_bot_app()
+    update = Update.de_json(data, current_bot.bot)
+    await current_bot.process_update(update)
 
     return "OK", 200
 

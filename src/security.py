@@ -18,18 +18,27 @@ def only_samuel(handler):
     """
     @wraps(handler)
     async def wrapper(update: Update, context: ContextTypes.DEFAULT_TYPE, *args, **kwargs):
-        allowed_id = int(os.environ["TELEGRAM_ALLOWED_USER_ID"])
+        if not update.effective_user:
+            return
+
+        raw_allowed = os.environ.get("TELEGRAM_ALLOWED_USER_ID", "").strip()
+        allowed_id = int(raw_allowed) if raw_allowed else 0
         user_id = update.effective_user.id
+        username = update.effective_user.username or update.effective_user.first_name
+
+        logger.info("📩 Mensaje recibido de '%s' (ID Telegram: %d)", username, user_id)
 
         if user_id != allowed_id:
             logger.warning(
-                "Acceso denegado — usuario no autorizado: %s (ID: %d)",
-                update.effective_user.username,
+                "🚨 ACCESO DENEGADO: El usuario '%s' tiene ID [%d], pero en tu archivo .env está configurado TELEGRAM_ALLOWED_USER_ID=[%d]",
+                username,
                 user_id,
+                allowed_id,
             )
-            # No respondemos nada: el bot simplemente ignora al intruso
+            # Durante la fase de desarrollo/setup, informamos por consola
             return
 
+        logger.info("✅ Usuario autorizado [%d]. Procesando solicitud...", user_id)
         return await handler(update, context, *args, **kwargs)
 
     return wrapper

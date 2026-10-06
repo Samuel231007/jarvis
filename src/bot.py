@@ -32,14 +32,20 @@ def create_bot() -> Application:
     application.add_handler(
         MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message)
     )
+    application.add_error_handler(on_error)
 
     logger.info("Bot configurado correctamente")
     return application
 
 
+async def on_error(update: object, context: ContextTypes.DEFAULT_TYPE):
+    """Registra cualquier excepción no controlada."""
+    logger.error("❌ Excepción no controlada en el bot:", exc_info=context.error)
+
+
 def run_polling():
     """Modo polling para pruebas locales (no se usa en Render)."""
-    token = os.environ["TELEGRAM_BOT_TOKEN"]
+    token = os.environ["TELEGRAM_BOT_TOKEN"].strip()
     application = Application.builder().token(token).build()
 
     application.add_handler(CommandHandler("start", cmd_start))
@@ -48,6 +54,7 @@ def run_polling():
     application.add_handler(
         MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message)
     )
+    application.add_error_handler(on_error)
 
     logger.info("Arrancando en modo polling (desarrollo local)...")
     application.run_polling()

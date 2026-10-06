@@ -33,7 +33,12 @@ Para acciones de calendario, responde SOLO con este JSON (sin markdown, sin text
 }
 
 Acciones disponibles:
-- ver_agenda: params: { dias: N }
+- ver_agenda: params: { "modo": "<hoy|manana|dias|semana>", "dias": N }
+  Ejemplos:
+  - "solo mañana" o "¿qué tengo mañana?" -> { "modo": "manana" }
+  - "¿qué tengo hoy?" -> { "modo": "hoy" }
+  - "siguientes 3 días" -> { "modo": "dias", "dias": 3 }
+  - "toda la semana" o "esta semana" -> { "modo": "semana", "dias": 7 }
 - crear_evento: params: { titulo, fecha_inicio (ISO8601), fecha_fin (ISO8601), descripcion }
 - eliminar_evento: params: { titulo_aproximado }
 - mover_evento: params: { titulo_aproximado, nueva_fecha_inicio (ISO8601), nueva_fecha_fin (ISO8601) }
@@ -99,11 +104,16 @@ class GeminiClient:
             return data.get("mensaje_confirmacion", "¿En qué más puedo ayudarte?")
 
         if action == "ver_agenda":
-            dias = params.get("dias", 7)
-            events = calendar_client.get_upcoming_events(days=dias)
+            modo = params.get("modo", "semana")
+            try:
+                dias = int(params.get("dias", 7))
+            except (ValueError, TypeError):
+                dias = 7
+
+            label, events = calendar_client.get_events(mode=modo, days=dias)
             if not events:
-                return f"No tienes eventos en los próximos {dias} días 🎉"
-            lines = [f"📅 *Próximos {dias} días:*\n"]
+                return f"{label}\n\nNo tienes eventos registrados para este periodo 🎉"
+            lines = [f"{label}\n"]
             for e in events:
                 lines.append(f"• {e['display']}")
             return "\n".join(lines)

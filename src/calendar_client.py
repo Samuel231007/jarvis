@@ -59,25 +59,58 @@ class CalendarClient:
 
         return build("calendar", "v3", credentials=creds)
 
-    def get_upcoming_events(self, days: int = 7) -> list[dict]:
+    def get_events(
+        self,
+        mode: str = "week",
+        days: int = 7,
+    ) -> tuple[str, list[dict]]:
         """
-        Retorna los eventos de los próximos N días del calendario principal.
+        Retorna (título_legible, lista_eventos).
+        Soporta:
+        - 'today' / 'hoy': solo el día de hoy
+        - 'tomorrow' / 'manana': solo el día de mañana
+        - 'days' / 'dias': próximos N días
+        - 'week' / 'semana': próximos 7 días
         """
         now = datetime.now(TZ)
-        end = now + timedelta(days=days)
+        mode = (mode or "week").lower()
+
+        if mode in ("today", "hoy"):
+            start = now.replace(hour=0, minute=0, second=0, microsecond=0)
+            end = now.replace(hour=23, minute=59, second=59, microsecond=999999)
+            label = "📅 *Tu agenda para HOY:*"
+        elif mode in ("tomorrow", "manana"):
+            tomorrow = now + timedelta(days=1)
+            start = tomorrow.replace(hour=0, minute=0, second=0, microsecond=0)
+            end = tomorrow.replace(hour=23, minute=59, second=59, microsecond=999999)
+            date_name = tomorrow.strftime("%A %d de %B").capitalize()
+            label = f"🌅 *Tu agenda para MAÑANA ({date_name}):*"
+        elif mode in ("days", "dias") or days != 7:
+            start = now
+            end = now + timedelta(days=days)
+            label = f"📆 *Próximos {days} días:*"
+        else:
+            start = now
+            end = now + timedelta(days=7)
+            label = "🗓️ *Toda la semana (próximos 7 días):*"
 
         result = self.service.events().list(
             calendarId="primary",
-            timeMin=now.isoformat(),
+            timeMin=start.isoformat(),
             timeMax=end.isoformat(),
-            maxResults=20,
+            maxResults=30,
             singleEvents=True,
             orderBy="startTime",
             timeZone=TIMEZONE,
         ).execute()
 
         events = result.get("items", [])
-        return [self._format_event(e) for e in events]
+        return label, [self._format_event(e) for e in events]
+
+    def get_upcoming_events(self, days: int = 7) -> list[dict]:
+        """Retorna los eventos de los próximos N días (compatibilidad)."""
+        _, events = self.get_events(mode="days", days=days)
+        return events
 
     def create_event(self, title: str, start: str, end: str, description: str = "") -> dict:
         """

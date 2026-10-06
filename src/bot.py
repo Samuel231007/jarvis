@@ -4,11 +4,12 @@ Registra los handlers y controla el acceso solo al usuario autorizado.
 """
 import os
 import logging
-from telegram import Update
+from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import (
     Application,
     CommandHandler,
     MessageHandler,
+    CallbackQueryHandler,
     filters,
     ContextTypes,
 )
@@ -45,6 +46,7 @@ def create_bot() -> Application:
     application.add_handler(CommandHandler("start", cmd_start))
     application.add_handler(CommandHandler("ayuda", cmd_help))
     application.add_handler(CommandHandler("agenda", cmd_agenda))
+    application.add_handler(CallbackQueryHandler(handle_agenda_callback, pattern=r"^agenda:"))
     application.add_handler(
         MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message)
     )
@@ -72,6 +74,7 @@ def run_polling():
     application.add_handler(CommandHandler("start", cmd_start))
     application.add_handler(CommandHandler("ayuda", cmd_help))
     application.add_handler(CommandHandler("agenda", cmd_agenda))
+    application.add_handler(CallbackQueryHandler(handle_agenda_callback, pattern=r"^agenda:"))
     application.add_handler(
         MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message)
     )
@@ -114,28 +117,93 @@ async def cmd_help(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 @only_samuel
 async def cmd_agenda(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Muestra los próximos 7 días del calendario."""
-    await update.message.reply_text("📅 Consultando tu agenda...")
+    """
+    Permite consultar la agenda por intervalo.
+    Si se escribe sin argumentos: muestra botones interactivos.
+    Si se escribe con argumentos (ej: /agenda 3 o /agenda manana): responde directamente.
+    """
+    args = context.args
+
+    # Si el usuario pasó argumentos (ej: /agenda 3, /agenda manana, /agenda hoy)
+    if args:
+        arg = args[0].lower()
+        if arg in ("hoy", "today"):
+            modo, dias = "hoy", 1
+        elif arg in ("manana", "mañana", "tomorrow"):
+            modo, dias = "manana", 1
+        elif arg in ("semana", "week"):
+            modo, dias = "semana", 7
+        elif arg.isdigit():
+            modo, dias = "dias", int(arg)
+        else:
+            modo, dias = "dias", 7
+
+        await update.message.reply_text("📅 Consultando tu agenda...")
+        try:
+            calendar = CalendarClient()
+            label, events = calendar.get_events(mode=modo, days=dias)
+            if not events:
+                await update.message.reply_text(
+                    f"{label}\n\nNo tienes eventos registrados para este periodo 🎉",
+                    parse_mode="Markdown"
+                )
+                return
+
+            lines = [f"{label}\n"]
+            for event in events:
+                lines.append(f"• {event['display']}")
+
+            await update.message.reply_text("\n".join(lines), parse_mode="Markdown")
+        except Exception as e:
+            logger.error("Error al consultar el calendario: %s", e)
+            await update.message.reply_text("❌ No pude consultar el calendario.")
+        return
+
+    # Si no pasó argumentos: mostrar botones para que elija con un clic
+    keyboard = [
+        [
+            InlineKeyboardButton("📅 Solo Hoy", callback_data="agenda:hoy:1"),
+            InlineKeyboardButton("🌅 Solo Mañana", callback_data="agenda:manana:1"),
+        ],
+        [
+            InlineKeyboardButton("📆 Siguientes 3 días", callback_data="agenda:dias:3"),
+            InlineKeyboardButton("🗓️ Toda la semana", callback_data="agenda:semana:7"),
+        ],
+    ]
+    reply_markup = InlineKeyboardMarkup(keyboard)
+
+    await update.message.reply_text(
+        "¿Qué periodo de tu agenda quieres consultar?",
+        reply_markup=reply_markup,
+    )
+
+
+@only_samuel
+async def handle_agenda_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Maneja la selección de los botones interactivos de /agenda."""
+    query = update.callback_query
+    await query.answer()
+
+    parts = query.data.split(":")
+    modo = parts[1] if len(parts) > 1 else "semana"
+    dias = int(parts[2]) if len(parts) > 2 else 7
 
     try:
         calendar = CalendarClient()
-        events = calendar.get_upcoming_events(days=7)
+        label, events = calendar.get_events(mode=modo, days=dias)
 
         if not events:
-            await update.message.reply_text("No tienes eventos en los próximos 7 días 🎉")
-            return
+            text = f"{label}\n\nNo tienes eventos registrados para este periodo 🎉"
+        else:
+            lines = [f"{label}\n"]
+            for event in events:
+                lines.append(f"• {event['display']}")
+            text = "\n".join(lines)
 
-        lines = ["📅 *Tu agenda — próximos 7 días:*\n"]
-        for event in events:
-            lines.append(f"• {event['display']}")
-
-        await update.message.reply_text("\n".join(lines), parse_mode="Markdown")
-
+        await query.edit_message_text(text, parse_mode="Markdown")
     except Exception as e:
-        logger.error("Error al consultar el calendario: %s", e)
-        await update.message.reply_text(
-            "❌ No pude consultar el calendario. Revisa que las credenciales estén configuradas."
-        )
+        logger.error("Error al consultar agenda desde botón: %s", e)
+        await query.edit_message_text("❌ No se pudo consultar el calendario.")
 
 
 # ──────────────────────────────────────────────

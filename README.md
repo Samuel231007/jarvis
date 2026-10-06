@@ -69,9 +69,13 @@ La autorización ahora incluye Calendar y el permiso `drive.file`, usado para el
 
 ### 5. Preparar la hoja privada de confirmaciones
 
-1. Crea en la misma cuenta de Google una hoja privada llamada `JARVIS Confirmaciones`.
-2. Añade una pestaña llamada `Pendientes`; la primera fila puede dejarse vacía, el bot pondrá sus encabezados.
-3. Copia el ID entre `/d/` y `/edit` de la URL y guárdalo como `GOOGLE_CONFIRMATIONS_SPREADSHEET_ID` en `.env` y en las variables del hosting.
+El permiso `drive.file` solo permite a Jarvis usar archivos que la aplicación creó o que Samuel abrió explícitamente con ella. Para mantener ese permiso limitado, no uses una hoja creada manualmente en Google Drive. Desde PowerShell, en la carpeta del proyecto, ejecuta una sola vez:
+
+```powershell
+python setup_confirmation_sheet.py
+```
+
+El asistente crea una hoja privada `JARVIS Confirmaciones` con la pestaña `Pendientes`, y muestra su enlace e ID. Copia el ID que muestra y configúralo como `GOOGLE_CONFIRMATIONS_SPREADSHEET_ID` tanto en el `.env` local como en las variables de Render. No vuelvas a ejecutar el asistente después de crear la hoja, para evitar duplicados.
 
 El bot limita sus propias lecturas y escrituras de esta hoja a 10 por minuto por proceso y no reintenta si Google rechaza una solicitud por cuota. Google indica que el uso estándar de Sheets no tiene costo adicional y advierte que exceder cuotas podría generar cargos más adelante en 2026; mantén bajo el uso y no habilites facturación para resolver límites.
 

@@ -12,6 +12,7 @@ from telegram.ext import (
     filters,
     ContextTypes,
 )
+from telegram.request import HTTPXRequest
 from src.security import only_samuel
 from src.gemini_client import GeminiClient
 from src.calendar_client import CalendarClient
@@ -19,11 +20,26 @@ from src.calendar_client import CalendarClient
 logger = logging.getLogger(__name__)
 
 
+def _get_request_config() -> HTTPXRequest:
+    """Configura timeouts más amplios para evitar caídas por latencia de red."""
+    return HTTPXRequest(
+        connection_pool_size=10,
+        connect_timeout=30.0,
+        read_timeout=30.0,
+        write_timeout=30.0,
+    )
+
+
 def create_bot() -> Application:
     """Construye y configura la aplicación del bot."""
-    token = os.environ["TELEGRAM_BOT_TOKEN"]
+    token = os.environ["TELEGRAM_BOT_TOKEN"].strip()
 
-    application = Application.builder().token(token).build()
+    application = (
+        Application.builder()
+        .token(token)
+        .request(_get_request_config())
+        .build()
+    )
 
     # Registrar handlers
     application.add_handler(CommandHandler("start", cmd_start))
@@ -46,7 +62,12 @@ async def on_error(update: object, context: ContextTypes.DEFAULT_TYPE):
 def run_polling():
     """Modo polling para pruebas locales (no se usa en Render)."""
     token = os.environ["TELEGRAM_BOT_TOKEN"].strip()
-    application = Application.builder().token(token).build()
+    application = (
+        Application.builder()
+        .token(token)
+        .request(_get_request_config())
+        .build()
+    )
 
     application.add_handler(CommandHandler("start", cmd_start))
     application.add_handler(CommandHandler("ayuda", cmd_help))

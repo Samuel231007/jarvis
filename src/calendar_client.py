@@ -29,7 +29,8 @@ class CalendarClient:
     def __init__(self):
         self.service = self._authenticate()
 
-    def _authenticate(self):
+    @staticmethod
+    def _authenticate():
         """
         Autentica con Google usando OAuth2.
         - Primera vez: abre el navegador para que Samuel autorice.

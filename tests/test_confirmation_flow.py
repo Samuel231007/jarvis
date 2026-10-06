@@ -68,6 +68,21 @@ class FakeSheetService:
 
 
 class ConfirmationStoreTests(unittest.TestCase):
+    def test_store_authenticates_google_credentials_without_calendar_instance(self):
+        credentials = object()
+        with (
+            patch.dict(os.environ, {"GOOGLE_CONFIRMATIONS_SPREADSHEET_ID": "private-sheet"}),
+            patch("src.confirmation_store.CalendarClient._authenticate", return_value=credentials) as authenticate,
+            patch("src.confirmation_store.build", return_value=FakeSheetService()) as build_service,
+        ):
+            store = ConfirmationStore()
+
+        authenticate.assert_called_once_with()
+        build_service.assert_called_once_with(
+            "sheets", "v4", credentials=credentials, cache_discovery=False
+        )
+        self.assertEqual(store.spreadsheet_id, "private-sheet")
+
     def make_store(self):
         store = object.__new__(ConfirmationStore)
         store.spreadsheet_id = "private-sheet"
